@@ -154,14 +154,3 @@ def parse_email(
         raw_source=raw_bytes,
     )
 
-
-if __name__ == "__main__":
-
-    result = parse_email(
-        "/home/mrinmoy/Programming/email-threat-detection/data/samples/test1.eml"
-    )
-
-    print("Subject:", result.subject)
-    print("From:", result.sender)
-    print("Reply-To:", result.reply_to)
-    print("Attachments:", len(result.attachments))
