@@ -2,3 +2,4 @@ docs/
 .vscode/
 myenv
 .pytest_cache
+data/training_dataset
