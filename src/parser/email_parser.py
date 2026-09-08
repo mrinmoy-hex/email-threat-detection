@@ -2,9 +2,17 @@
 
 import email
 import hashlib
-from dataclasses import dataclass, field
+import logging
+import os
+from dataclasses import dataclass
 from email import policy
+from email.errors import MessageError
 from typing import Optional
+
+logger = logging.getLogger(__name__)
+
+MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB
+ALLOWED_DIRS = [os.path.abspath("data/samples")]
 
 
 @dataclass
@@ -36,10 +44,18 @@ class ParsedEmail:
         return self.headers.get("Message-ID", [""])[0]
 
 
+def _validate_path(file_path: str) -> str:
+    resolved = os.path.abspath(file_path)
+    if not any(resolved.startswith(d) for d in ALLOWED_DIRS):
+        logger.warning(f"Path traversal attempt blocked: {file_path}")
+        raise ValueError("Access denied: path outside allowed directories")
+    return resolved
+
+
 def _extract_headers(msg) -> dict[str, list[str]]:
     headers = {}
 
-    for key in msg.keys():
+    for key in set(msg.keys()):
         headers[key] = msg.get_all(key, failobj=[])
 
     return headers
@@ -52,7 +68,8 @@ def _extract_attachments(msg) -> list[dict]:
 
         try:
             payload = part.get_payload(decode=True)
-        except Exception:
+        except (MessageError, ValueError, TypeError) as e:
+            logger.warning(f"Failed to decode attachment payload: {e}")
             payload = None
 
         if payload is None:
@@ -71,23 +88,29 @@ def _extract_attachments(msg) -> list[dict]:
     return attachments
 
 
-def _extract_forwarded_message(msg) -> Optional["ParsedEmail"]:
+def _extract_forwarded_message(msg, depth: int = 0) -> Optional["ParsedEmail"]:
+    if depth >= 5:
+        logger.warning("Max recursion depth reached for forwarded messages")
+        return None
+
     for part in msg.iter_attachments():
 
         if part.get_content_type() != "message/rfc822":
             continue
 
         try:
-            inner_msg = part.get_payload(0)
+            inner_msg = next(part.iter_parts(), part) if part.is_multipart() else part
 
             if inner_msg is None:
                 continue
 
             return parse_email(
-                raw_bytes=inner_msg.as_bytes()
+                raw_bytes=inner_msg.as_bytes(),
+                _depth=depth + 1
             )
 
-        except Exception:
+        except (MessageError, ValueError, AttributeError) as e:
+            logger.warning(f"Failed to parse inner message: {e}")
             continue
 
     return None
@@ -95,7 +118,8 @@ def _extract_forwarded_message(msg) -> Optional["ParsedEmail"]:
 
 def parse_email(
     file_path: str = None,
-    raw_bytes: bytes = None
+    raw_bytes: bytes = None,
+    _depth: int = 0
 ) -> ParsedEmail:
     """
     Parse an .eml file and return its contents in a structured form.
@@ -109,6 +133,12 @@ def parse_email(
             raise ValueError(
                 "Either file_path or raw_bytes must be provided"
             )
+
+        file_path = _validate_path(file_path)
+
+        if os.path.getsize(file_path) > MAX_FILE_SIZE:
+            logger.warning(f"File exceeds maximum allowed size: {file_path}")
+            raise ValueError("File too large")
 
         with open(file_path, "rb") as f:
             raw_bytes = f.read()
@@ -142,7 +172,7 @@ def parse_email(
 
     attachments = _extract_attachments(msg)
 
-    original_message = _extract_forwarded_message(msg)
+    original_message = _extract_forwarded_message(msg, depth=_depth)
 
     return ParsedEmail(
         headers=headers,
@@ -153,4 +183,3 @@ def parse_email(
         original_message=original_message,
         raw_source=raw_bytes,
     )
-

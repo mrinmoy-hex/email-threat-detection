@@ -30,9 +30,9 @@ def _parse_auth_results(headers: dict) -> dict:
     if not auth_header:
         return result
 
-    combined = " ".join(auth_header)
+    combined = " ".join(str(h) for h in auth_header)
     for mechanism in ("spf", "dkim", "dmarc"):
-        match = re.search(rf"{mechanism}=(\w+)", combined, re.IGNORECASE)
+        match = re.search(rf"(?:^|;)\s*{mechanism}\s*=\s*([a-zA-Z0-9]+)", combined, re.IGNORECASE)
         if match:
             result[mechanism] = match.group(1).lower()
     return result
@@ -42,11 +42,12 @@ def _parse_received_chain(headers: dict) -> list:
     received_list = headers.get("Received", [])
     chain = []
     for hop in received_list:
-        from_match = re.search(r"from\s+([\w.-]+)", hop)
-        by_match = re.search(r"by\s+([\w.-]+)", hop)
-        ip_match = re.search(r"\[([\d.]+)\]", hop)
+        hop_str = str(hop)
+        from_match = re.search(r"from\s+([\w.-]+)", hop_str, re.IGNORECASE)
+        by_match = re.search(r"by\s+([\w.-]+)", hop_str, re.IGNORECASE)
+        ip_match = re.search(r"\[([a-fA-F0-9.:]+)\]", hop_str)
         chain.append({
-            "raw": hop,
+            "raw": hop_str,
             "from_host": from_match.group(1) if from_match else None,
             "by_host": by_match.group(1) if by_match else None,
             "ip": ip_match.group(1) if ip_match else None,
@@ -68,13 +69,16 @@ def analyze_headers(headers: dict) -> HeaderAnalysis:
     return_path_header = headers.get("Return-Path", [None])[0]
     reply_to_header = headers.get("Reply-To", [None])[0]
 
-    from_domain = _extract_domain(from_header)
-    return_path_domain = _extract_domain(return_path_header)
-    reply_to_domain = _extract_domain(reply_to_header)
+    from_domain = _extract_domain(str(from_header)) if from_header else None
+    return_path_domain = _extract_domain(str(return_path_header)) if return_path_header else None
+    reply_to_domain = _extract_domain(str(reply_to_header)) if reply_to_header else None
 
-    domain_mismatch = bool(
-        from_domain and return_path_domain and from_domain != return_path_domain
-    )
+    domain_mismatch = False
+    if from_domain:
+        if return_path_domain and from_domain != return_path_domain:
+            domain_mismatch = True
+        elif reply_to_domain and from_domain != reply_to_domain:
+            domain_mismatch = True
 
     auth_results = _parse_auth_results(headers)
     received_chain = _parse_received_chain(headers)
@@ -92,4 +96,3 @@ def analyze_headers(headers: dict) -> HeaderAnalysis:
         hop_count=len(received_chain),
         suspicious_hops=suspicious_hops,
     )
-
