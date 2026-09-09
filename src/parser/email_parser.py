@@ -11,7 +11,7 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB
+MAX_FILE_SIZE = 25 * 1024 * 1024  # 10 MB
 ALLOWED_DIRS = [os.path.abspath("data/samples")]
 
 
